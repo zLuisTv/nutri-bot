@@ -26,7 +26,12 @@ interface Conversation {
   }[];
 }
 
-const uri = process.env.MONGODB_URI || "";
+const uri = process.env.MONGODB_URI;
+const apiKey = process.env.GEMINI_API_KEY;
+
+if (!uri) throw new Error("Falta MONGODB_URI");
+if (!apiKey) throw new Error("Falta GEMINI_API_KEY");
+
 const client = new MongoClient(uri);
 const dbName = "chatdb";
 const collectionName = "conversations";
@@ -66,14 +71,6 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { reply: "Unsupported content type" },
         { status: 400 }
-      );
-    }
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || !uri) {
-      return NextResponse.json(
-        { reply: "Faltan variables de entorno" },
-        { status: 500 }
       );
     }
 
@@ -126,10 +123,14 @@ export async function POST(req: Request) {
     try {
       await collection.updateOne(
         { sessionId },
-        { $set: { history: conversationHistory.history.concat({
-          role: "model",
-          parts: [{ text: reply }],
-        }) } }
+        {
+          $set: {
+            history: conversationHistory.history.concat({
+              role: "model",
+              parts: [{ text: reply }],
+            }),
+          },
+        }
       );
     } catch (mongoErr) {
       console.error("Error al guardar en MongoDB:", mongoErr);
@@ -137,7 +138,10 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ reply, image: base64Image || null });
   } catch (err) {
-    console.error("Error general:", err);
+    console.error("Error general:", err, {
+      MONGO_URI: process.env.MONGODB_URI,
+      GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    });
     return NextResponse.json({
       reply: "Error al procesar la solicitud con NutriBot.",
     });
