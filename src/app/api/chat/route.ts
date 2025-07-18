@@ -114,6 +114,12 @@ export async function POST(req: Request) {
     );
 
     const data = await response.json();
+    if (!response.ok) {
+      console.error("Gemini API error:", data);
+      throw new Error(
+        data?.error?.message || "Error en la respuesta de Gemini"
+      );
+    }
     console.log("Gemini API response:", JSON.stringify(data, null, 2));
 
     const reply =
