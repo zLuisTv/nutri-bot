@@ -133,11 +133,11 @@ export default function Home() {
   }, []);
 
   return (
-    <main className="flex flex-col items-center justify-center min-h-screen bg-gray-50 p-4 max-w-[430px] mx-auto">
+    <main className="flex flex-col items-center justify-center min-h-screen bg-gray-50 p-4 max-w-[430px] mx-auto font-light">
       {!showChat ? (
         <form
           onSubmit={handleSubmitForm}
-          className="w-full space-y-4 bg-white p-6 rounded-xl shadow"
+          className="w-full space-y-4 bg-white p-6 rounded-2xl shadow-xl"
         >
           <h2 className="text-2xl font-bold text-center">Datos del Usuario</h2>
           {["name", "age", "weight", "height"].map((field) => (
@@ -156,53 +156,61 @@ export default function Home() {
               }
               value={formData[field as keyof typeof formData]}
               onChange={handleChange}
-              className="w-full p-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full p-3 border border-gray-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500"
               required
             />
           ))}
           <button
             type="submit"
-            className="w-full bg-blue-600 text-white py-3 rounded-xl hover:bg-blue-700"
+            className="w-full bg-blue-600 text-white py-3 rounded-2xl hover:bg-blue-700"
           >
             Siguiente
           </button>
         </form>
       ) : (
-        <div className="w-full flex flex-col h-[90vh] bg-white p-4 rounded-xl shadow">
+        <div className="w-full flex flex-col h-[calc(100dvh-2rem)] bg-white p-4 rounded-2xl shadow-xl overflow-hidden">
           <h2 className="text-xl font-semibold mb-3 text-center">
             Chat con NutriBot
           </h2>
           <div className="flex-1 overflow-y-auto space-y-2 px-1 mb-2">
             {chatHistory.map((msg, i) => (
+              // Solución completa que mantiene:
+              // - El mensaje con tamaño ajustado al contenido.
+              // - El ícono de sonido correctamente posicionado dentro del mensaje del bot.
+
               <div
                 key={i}
-                className={`rounded-2xl max-w-[85%] whitespace-pre-wrap flex items-start gap-2 p-3 ${
-                  msg.sender === "user"
-                    ? "bg-blue-100 self-end ml-auto text-right"
-                    : "bg-gray-200 self-start mr-auto text-left"
+                className={`flex ${
+                  msg.sender === "user" ? "justify-end" : "justify-start"
                 }`}
               >
-                <div className="flex-1">
+                <div
+                  className={`relative inline-block rounded-2xl whitespace-pre-wrap p-3 text-sm break-words shadow-md max-w-[85%] ${
+                    msg.sender === "user"
+                      ? "bg-blue-100 text-right"
+                      : "bg-gray-200 text-left"
+                  }`}
+                >
                   {msg.image && (
                     <Image
                       src={msg.image}
                       alt="imagen"
-                      className="w-32 rounded mb-2 border"
-                      width={128}
-                      height={128}
+                      className="w-full max-w-[250px] h-auto rounded-xl mb-2 border"
+                      width={250}
+                      height={250}
                     />
                   )}
                   <ReactMarkdown>{msg.text}</ReactMarkdown>
+                  {msg.sender === "bot" && (
+                    <motion.button
+                      whileTap={{ scale: 1.3 }}
+                      onClick={() => speakText(msg.text, i)}
+                      className="absolute top-2 -right-8 text-gray-600 hover:text-black"
+                    >
+                      {speakingIndex === i ? <VolumeXIcon /> : <Volume2Icon />}
+                    </motion.button>
+                  )}
                 </div>
-                {msg.sender === "bot" && (
-                  <motion.button
-                    whileTap={{ scale: 1.3 }}
-                    onClick={() => speakText(msg.text, i)}
-                    className="text-gray-600 hover:text-black"
-                  >
-                    {speakingIndex === i ? <VolumeXIcon /> : <Volume2Icon />}
-                  </motion.button>
-                )}
               </div>
             ))}
             {loading && (
@@ -216,7 +224,7 @@ export default function Home() {
               <Image
                 src={URL.createObjectURL(image)}
                 alt="preview"
-                className="w-24 border rounded"
+                className="w-24 h-auto border rounded-2xl"
                 width={96}
                 height={96}
               />
@@ -237,7 +245,7 @@ export default function Home() {
             </button>
           )}
 
-          <div className="flex items-center gap-2 mt-auto">
+          <div className="flex items-center gap-2 mt-auto pt-2">
             <label className="text-gray-600 p-2 rounded-full border cursor-pointer">
               <CameraIcon className="w-5 h-5" />
               <input
@@ -253,7 +261,7 @@ export default function Home() {
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               placeholder="Escribe un mensaje..."
-              className="flex-1 p-2 border rounded-xl focus:outline-none"
+              className="flex-1 p-2 border border-gray-300 rounded-2xl focus:outline-none"
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();

@@ -80,7 +80,7 @@ export async function POST(req: Request) {
 
     await collection.deleteOne({ sessionId });
 
-    const systemPrompt = `Eres un nutricionista experto llamado 'Dr. NutriBot'. Tus respuestas siempre deben estar enfocadas en brindar consejos sobre nutrición, alimentos, beneficios de las comidas, calorías, proteínas, vitaminas y cómo impactan en la salud.\n\nDatos del cliente:\n- Nombre: ${name}\n- Edad: ${age} años\n- Peso: ${weight} kg\n- Estatura: ${height} cm\n\nSolo brinda información detallada si es necesaria o si el cliente lo solicita.\nRecuerda mantener el enfoque nutricional incluso si las preguntas cambian de tema.`;
+    const systemPrompt = `Eres un nutricionista experto llamado 'Dr. NutriBot'. No repitas siempre lo mismo, tus respuestas siempre deben estar enfocadas en brindar consejos sobre nutrición, alimentos, beneficios de las comidas, calorías, proteínas, vitaminas y cómo impactan en la salud.\n\nDatos del cliente:\n- Nombre: ${name}\n- Edad: ${age} años\n- Peso: ${weight} kg\n- Estatura: ${height} cm\n\nSolo brinda información detallada si es necesaria o si el cliente lo solicita, no envies demasiado texto.\nRecuerda mantener el enfoque nutricional incluso si las preguntas cambian de tema.`;
 
     const conversationHistory: Conversation = {
       sessionId,
@@ -120,7 +120,6 @@ export async function POST(req: Request) {
         data?.error?.message || "Error en la respuesta de Gemini"
       );
     }
-    console.log("Gemini API response:", JSON.stringify(data, null, 2));
 
     const reply =
       data?.candidates?.[0]?.content?.parts?.[0]?.text ||
@@ -144,10 +143,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ reply, image: base64Image || null });
   } catch (err) {
-    console.error("Error general:", err, {
-      MONGO_URI: process.env.MONGODB_URI,
-      GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-    });
+    console.error("Error general:", err);
     return NextResponse.json({
       reply: "Error al procesar la solicitud con NutriBot.",
     });
