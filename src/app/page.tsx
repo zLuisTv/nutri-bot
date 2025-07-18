@@ -185,9 +185,9 @@ export default function Home() {
                 }`}
               >
                 <div
-                  className={`relative inline-block rounded-2xl whitespace-pre-wrap p-3 text-sm break-words shadow-md max-w-[85%] ${
+                    className={`relative inline-block rounded-2xl whitespace-pre-wrap p-3 text-sm break-words shadow-md max-w-[85%]  ${
                     msg.sender === "user"
-                      ? "bg-blue-100 text-right"
+                      ? "bg-blue-100 text-left"
                       : "bg-gray-200 text-left"
                   }`}
                 >
