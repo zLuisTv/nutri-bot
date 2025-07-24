@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { 
   Camera, 
   Send, 
@@ -9,7 +9,8 @@ import {
   VolumeX,
   RefreshCw,
   User,
-  Bot
+  Bot,
+  AlertTriangle
 } from "lucide-react";
 import Image from "next/image";
 
@@ -29,10 +30,30 @@ interface UserData {
   height: string;
 }
 
+// Hook personalizado para debounce
+function useDebounce<Args extends unknown[]>(
+  func: (...args: Args) => void,
+  delay: number
+): (...args: Args) => void {
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  return useCallback((...args: Args) => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => func(...args), delay);
+  }, [func, delay]);
+}
+
 // Componente para renderizar markdown simple
 const SimpleMarkdown = ({ children }: { children: string }) => {
   const formatText = (text: string) => {
-    return text
+    // Sanitizar HTML para prevenir XSS
+    const sanitized = text
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;');
+    
+    return sanitized
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.*?)\*/g, '<em>$1</em>')
       .replace(/\n\n/g, '</p><p>')
@@ -49,6 +70,61 @@ const SimpleMarkdown = ({ children }: { children: string }) => {
   );
 };
 
+// Componente para mostrar errores
+const ErrorMessage = ({ message, onRetry }: { message: string; onRetry?: () => void }) => (
+  <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
+    <div className="flex items-start gap-2">
+      <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <p className="text-sm text-red-700">{message}</p>
+        {onRetry && (
+          <button
+            onClick={onRetry}
+            className="mt-2 text-xs text-red-600 hover:text-red-800 underline"
+          >
+            Reintentar
+          </button>
+        )}
+      </div>
+    </div>
+  </div>
+);
+
+// Componente para validación en tiempo real
+const ValidationInput = ({ 
+  field, 
+  value, 
+  onChange, 
+  error 
+}: { 
+  field: { name: string; type: string; placeholder: string; icon: string };
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  error?: string;
+}) => (
+  <div className="relative">
+    <span className="absolute left-3 top-3 text-lg">{field.icon}</span>
+    <input
+      type={field.type}
+      name={field.name}
+      placeholder={field.placeholder}
+      value={value}
+      onChange={onChange}
+      className={`w-full pl-12 pr-4 py-3 border rounded-xl focus:outline-none focus:ring-2 transition-all ${
+        error 
+          ? 'border-red-300 focus:ring-red-400 focus:border-red-400' 
+          : 'border-gray-200 focus:ring-green-400 focus:border-transparent'
+      }`}
+      required
+      min={field.type === "number" ? "1" : undefined}
+      max={field.type === "number" && field.name === "age" ? "120" : undefined}
+    />
+    {error && (
+      <p className="text-xs text-red-500 mt-1 ml-1">{error}</p>
+    )}
+  </div>
+);
+
 export default function NutriBot() {
   const [formData, setFormData] = useState<UserData>({
     name: "",
@@ -57,6 +133,7 @@ export default function NutriBot() {
     height: "",
   });
   
+  const [formErrors, setFormErrors] = useState<Partial<UserData>>({});
   const [showChat, setShowChat] = useState(false);
   const [message, setMessage] = useState("");
   const [image, setImage] = useState<File | null>(null);
@@ -64,11 +141,61 @@ export default function NutriBot() {
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [isOnline, setIsOnline] = useState(true);
   const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
 
   const inputFileRef = useRef<HTMLInputElement>(null);
   const currentUtterance = useRef<SpeechSynthesisUtterance | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // Validación en tiempo real
+  const validateField = useCallback((name: string, value: string): string | undefined => {
+    switch (name) {
+      case 'name':
+        if (!value.trim()) return 'Nombre es requerido';
+        if (value.length < 2) return 'Nombre muy corto';
+        if (value.length > 100) return 'Nombre muy largo';
+        if (!/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]+$/.test(value)) return 'Nombre contiene caracteres inválidos';
+        break;
+      case 'age':
+        if (!value) return 'Edad es requerida';
+        const age = parseInt(value);
+        if (isNaN(age) || age < 1 || age > 120) return 'Edad debe estar entre 1 y 120 años';
+        break;
+      case 'weight':
+        if (!value) return 'Peso es requerido';
+        const weight = parseFloat(value);
+        if (isNaN(weight) || weight < 20 || weight > 300) return 'Peso debe estar entre 20 y 300 kg';
+        break;
+      case 'height':
+        if (!value) return 'Altura es requerida';
+        const height = parseInt(value);
+        if (isNaN(height) || height < 100 || height > 250) return 'Altura debe estar entre 100 y 250 cm';
+        break;
+    }
+    return undefined;
+  }, []);
+
+  const debouncedValidation = useDebounce((name: string, value: string) => {
+    const error = validateField(name, value);
+    setFormErrors(prev => ({ ...prev, [name]: error }));
+  }, 300);
+
+  // Detectar estado de conexión
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline); 
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   // Scroll automático al último mensaje
   useEffect(() => {
@@ -78,12 +205,29 @@ export default function NutriBot() {
   }, [chatHistory, loading]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    setFormData({ ...formData, [name]: value });
+    debouncedValidation(name, value);
   };
 
   const handleSubmitForm = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Validar todos los campos
+    const errors: Partial<UserData> = {};
+    Object.entries(formData).forEach(([key, value]) => {
+      const error = validateField(key, value);
+      if (error) errors[key as keyof UserData] = error;
+    });
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+
     setShowChat(true);
+    setError(null);
+    
     // Mensaje de bienvenida
     setChatHistory([
       {
@@ -97,11 +241,21 @@ export default function NutriBot() {
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
       const file = e.target.files[0];
-      // Validar tamaño (máximo 5MB)
-      if (file.size > 5 * 1024 * 1024) {
-        alert("La imagen es demasiado grande. Máximo 5MB.");
+      
+      // Validar tipo de archivo
+      const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      if (!allowedTypes.includes(file.type)) {
+        setError("Tipo de imagen no válido. Usa JPG, PNG o WebP.");
         return;
       }
+      
+      // Validar tamaño (máximo 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        setError("La imagen es demasiado grande. Máximo 5MB.");
+        return;
+      }
+      
+      setError(null);
       setImage(file);
     }
   };
@@ -127,33 +281,45 @@ export default function NutriBot() {
     }
   };
 
-  const sendMessage = async () => {
+  const sendMessage = async (retryAttempt = false) => {
     if ((!message.trim() && !image) || loading) return;
+
+    if (!isOnline) {
+      setError("Sin conexión a internet. Verifica tu conexión.");
+      return;
+    }
 
     const userMessage = message.trim();
     const imageUrl = image ? URL.createObjectURL(image) : undefined;
     
-    // Agregar mensaje del usuario
-    setChatHistory(prev => [
-      ...prev,
-      { 
-        sender: "user", 
-        text: userMessage || "📷 Imagen enviada", 
-        image: imageUrl,
-        timestamp: Date.now()
-      },
-    ]);
+    // Agregar mensaje del usuario solo si no es un retry
+    if (!retryAttempt) {
+      setChatHistory(prev => [
+        ...prev,
+        { 
+          sender: "user", 
+          text: userMessage || "📷 Imagen enviada", 
+          image: imageUrl,
+          timestamp: Date.now()
+        },
+      ]);
+    }
 
-    // Limpiar inputs
-    setMessage("");
+    // Limpiar inputs solo si no es retry
+    const messageToSend = message;
     const imageToSend = image;
-    setImage(null);
-    if (inputFileRef.current) inputFileRef.current.value = "";
+    
+    if (!retryAttempt) {
+      setMessage("");
+      setImage(null);
+      if (inputFileRef.current) inputFileRef.current.value = "";
+    }
 
     // Configurar abort controller
     const controller = new AbortController();
     setAbortController(controller);
     setLoading(true);
+    setError(null);
 
     try {
       const formDataToSend = new FormData();
@@ -161,7 +327,7 @@ export default function NutriBot() {
       formDataToSend.append("age", formData.age);
       formDataToSend.append("weight", formData.weight);
       formDataToSend.append("height", formData.height);
-      formDataToSend.append("message", userMessage);
+      formDataToSend.append("message", messageToSend);
       formDataToSend.append("sessionId", sessionId);
       
       if (imageToSend) {
@@ -175,7 +341,15 @@ export default function NutriBot() {
       });
 
       if (!res.ok) {
-        throw new Error(`HTTP Error: ${res.status}`);
+        if (res.status === 429) {
+          const data = await res.json();
+          throw new Error(`Rate limit alcanzado. Intenta después de: ${new Date(data.resetTime).toLocaleTimeString()}`);
+        } else if (res.status >= 500) {
+          throw new Error("Error del servidor. Inténtalo nuevamente.");
+        } else {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(errorData.reply || `Error HTTP: ${res.status}`);
+        }
       }
 
       const data = await res.json();
@@ -189,17 +363,31 @@ export default function NutriBot() {
         }
       ]);
 
+      setRetryCount(0); // Reset retry count on success
+
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
         console.error("Error en el chat:", err);
-        setChatHistory((prev) => [
-          ...prev,
-          { 
-            sender: "bot", 
-            text: "❌ Lo siento, hubo un error al procesar tu mensaje. Por favor, inténtalo nuevamente.",
-            timestamp: Date.now()
-          },
-        ]);
+        
+        const errorMessage = err instanceof Error ? err.message : "Error desconocido";
+        setError(errorMessage);
+        
+        // Auto-retry para errores de red (máximo 3 intentos)
+        if (retryCount < 3 && (errorMessage.includes("fetch") || errorMessage.includes("network"))) {
+          setTimeout(() => {
+            setRetryCount(prev => prev + 1);
+            sendMessage(true);
+          }, 2000 * (retryCount + 1)); // Backoff exponencial
+        } else {
+          setChatHistory((prev) => [
+            ...prev,
+            { 
+              sender: "bot", 
+              text: `❌ ${errorMessage}`,
+              timestamp: Date.now()
+            },
+          ]);
+        }
       }
     } finally {
       setLoading(false);
@@ -221,13 +409,19 @@ export default function NutriBot() {
       .replace(/\*\*(.*?)\*\*/g, '$1')
       .replace(/\*(.*?)\*/g, '$1')
       .replace(/[#*`]/g, '')
-      .replace(/\n/g, '. ');
+      .replace(/\n/g, '. ')
+      .replace(/❌|⚠️|✅|📷|🥗|👋|⏰|⏹️|⏳/g, ''); // Remover emojis
+
+    if (!cleanText.trim()) return;
 
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.lang = 'es-ES';
     utterance.rate = 0.9;
+    utterance.pitch = 1;
+    utterance.volume = 1;
     
     currentUtterance.current = utterance;
+    
     utterance.onend = () => {
       setSpeakingIndex(null);
       currentUtterance.current = null;
@@ -251,11 +445,19 @@ export default function NutriBot() {
           timestamp: Date.now(),
         },
       ]);
+      
+      // Detener síntesis de voz si está activa
       if (speechSynthesis.speaking) {
         speechSynthesis.cancel();
       }
       setSpeakingIndex(null);
+      setError(null);
+      setRetryCount(0);
     }
+  };
+
+  const retryLastMessage = () => {
+    sendMessage(true);
   };
 
   // Cleanup al desmontar el componente
@@ -280,8 +482,22 @@ export default function NutriBot() {
     { name: "height", type: "number", placeholder: "Estatura (cm)", icon: "📏" },
   ];
 
+  const isFormValid = Object.entries(formData).every(
+  ([key, value]) => {
+    const error = validateField(key, value);
+    return !error && value.trim() !== "";
+  }
+)
+
   return (
     <main className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-green-50 to-blue-50 p-4 max-w-[430px] mx-auto">
+      {/* Indicador de conexión */}
+      {!isOnline && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-4 py-2 rounded-lg text-sm z-50">
+          Sin conexión a internet
+        </div>
+      )}
+
       {!showChat ? (
         <div className="w-full space-y-6">
           {/* Header */}
@@ -294,7 +510,7 @@ export default function NutriBot() {
           </div>
 
           {/* Form */}
-          <div
+          <form
             onSubmit={handleSubmitForm}
             className="w-full space-y-4 bg-white p-6 rounded-2xl shadow-lg border border-gray-100"
           >
@@ -303,29 +519,23 @@ export default function NutriBot() {
             </h2>
             
             {inputFields.map((field) => (
-              <div key={field.name} className="relative">
-                <span className="absolute left-3 top-3 text-lg">{field.icon}</span>
-                <input
-                  type={field.type}
-                  name={field.name}
-                  placeholder={field.placeholder}
-                  value={formData[field.name as keyof UserData]}
-                  onChange={handleChange}
-                  className="w-full pl-12 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition-all"
-                  required
-                  min={field.type === "number" ? "1" : undefined}
-                />
-              </div>
+              <ValidationInput
+                key={field.name}
+                field={field}
+                value={formData[field.name as keyof UserData]}
+                onChange={handleChange}
+                error={formErrors[field.name as keyof UserData]}
+              />
             ))}
             
             <button
-              type="button"
-              onClick={handleSubmitForm}
-              className="w-full bg-gradient-to-r from-green-500 to-blue-500 text-white py-3 rounded-xl hover:from-green-600 hover:to-blue-600 transition-all transform hover:scale-[1.02] font-medium"
+              type="submit"
+              disabled={!isFormValid}
+              className="w-full bg-gradient-to-r from-green-500 to-blue-500 text-white py-3 rounded-xl hover:from-green-600 hover:to-blue-600 transition-all transform hover:scale-[1.02] font-medium disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
             >
               Comenzar Chat 💬
             </button>
-          </div>
+          </form>
 
           <p className="text-xs text-center text-gray-500 px-4">
             Tu información se usa solo para personalizar las recomendaciones nutricionales
@@ -341,7 +551,9 @@ export default function NutriBot() {
               </div>
               <div>
                 <h2 className="font-semibold">Dr. NutriBot</h2>
-                <p className="text-xs opacity-90">Nutricionista IA</p>
+                <p className="text-xs opacity-90">
+                  {loading ? "Escribiendo..." : "Nutricionista IA"}
+                </p>
               </div>
             </div>
             <button
@@ -358,6 +570,14 @@ export default function NutriBot() {
             ref={chatContainerRef}
             className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50"
           >
+            {/* Mostrar errores globales */}
+            {error && (
+              <ErrorMessage 
+                message={error} 
+                onRetry={retryCount < 3 ? retryLastMessage : undefined}
+              />
+            )}
+
             {chatHistory.map((msg, i) => (
               <div
                 key={`${msg.timestamp}-${i}`}
@@ -380,13 +600,16 @@ export default function NutriBot() {
                     }`}
                   >
                     {msg.image && (
-                      <Image
-                        src={msg.image}
-                        alt="Imagen enviada"
-                        className="w-full max-w-[200px] h-auto rounded-xl mb-2 border border-gray-200"
-                        width={200}
-                        height={200}
-                      />
+                      <div className="relative">
+                        <Image
+                          src={msg.image}
+                          alt="Imagen enviada"
+                          className="w-full max-w-[200px] h-auto rounded-xl mb-2 border border-gray-200"
+                          width={200}
+                          height={200}
+                          unoptimized
+                        />
+                      </div>
                     )}
                     
                     {msg.sender === "bot" ? (
@@ -396,11 +619,11 @@ export default function NutriBot() {
                     )}
                   </div>
                   
-                  {msg.sender === "bot" && (
+                  {msg.sender === "bot" && 'speechSynthesis' in window && (
                     <button
                       onClick={() => speakText(msg.text, i)}
                       className="absolute -right-8 top-2 opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-blue-500 transition-all"
-                      title="Leer en voz alta"
+                      title={speakingIndex === i ? "Detener lectura" : "Leer en voz alta"}
                     >
                       {speakingIndex === i ? (
                         <VolumeX className="w-4 h-4" />
@@ -426,9 +649,13 @@ export default function NutriBot() {
                 </div>
                 <div className="bg-white p-3 rounded-2xl rounded-bl-md border border-gray-100 shadow-sm">
                   <div className="flex gap-1">
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    {[0, 1, 2].map((i) => (
+                      <div 
+                        key={i}
+                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" 
+                        style={{ animationDelay: `${i * 0.1}s` }}
+                      />
+                    ))}
                   </div>
                 </div>
               </div>
@@ -443,8 +670,9 @@ export default function NutriBot() {
                   src={URL.createObjectURL(image)}
                   alt="Vista previa"
                   className="w-12 h-12 object-cover rounded-lg border border-gray-200"
-                  width={12}
-                  height={12}
+                  width={48}
+                  height={48}
+                  unoptimized
                 />
                 <div className="flex-1">
                   <p className="text-sm font-medium text-gray-700">{image.name}</p>
@@ -483,9 +711,10 @@ export default function NutriBot() {
                 <input
                   ref={inputFileRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/jpeg,image/jpg,image/png,image/webp"
                   onChange={handleImageChange}
                   className="hidden"
+                  disabled={loading}
                 />
               </label>
               
@@ -503,13 +732,15 @@ export default function NutriBot() {
                     }
                   }}
                   disabled={loading}
+                  maxLength={2000}
                 />
               </div>
               
               <button
-                onClick={sendMessage}
-                disabled={loading || (!message.trim() && !image)}
-                className="p-3 bg-gradient-to-r from-green-500 to-blue-500 text-white rounded-xl hover:from-green-600 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-105"
+                onClick={() => sendMessage()}
+                disabled={loading || (!message.trim() && !image) || !isOnline}
+                className="p-3 bg-gradient-to-r from-green-500 to-blue-500 text-white rounded-xl hover:from-green-600 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-105 disabled:transform-none"
+                title={!isOnline ? "Sin conexión" : undefined}
               >
                 <Send className="w-5 h-5" />
               </button>
